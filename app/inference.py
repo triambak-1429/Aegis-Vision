@@ -9,8 +9,8 @@ from PIL import Image
 import onnxruntime as ort
 from src.config import ONNX_MODEL_PATH, IMAGE_SIZE, ID2LABEL
 
-# Fallback Hugging Face URL if local ONNX file is absent
-FALLBACK_ONNX_URL = "https://huggingface.co/google/vit-base-patch16-224/resolve/main/onnx/model.onnx"
+# Working ONNX model link from Hugging Face
+FALLBACK_ONNX_URL = "https://huggingface.co/onnx-community/vit-base-patch16-224-ONNX/resolve/main/onnx/model.onnx"
 
 class AegisVisionEngine:
     def __init__(self):
@@ -20,7 +20,15 @@ class AegisVisionEngine:
         if not onnx_file.exists():
             print(f"ONNX model not found at {onnx_file}. Downloading runtime weights...")
             onnx_file.parent.mkdir(parents=True, exist_ok=True)
-            urllib.request.urlretrieve(FALLBACK_ONNX_URL, onnx_file)
+            
+            # User-Agent header prevents 403/404 blocks on direct downloads
+            req = urllib.request.Request(
+                FALLBACK_ONNX_URL, 
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            with urllib.request.urlopen(req) as response, open(onnx_file, "wb") as out_file:
+                out_file.write(response.read())
+                
             print("Model download complete!")
 
         # Initialize CPU ONNX session
