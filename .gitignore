@@ -1,0 +1,19 @@
+# Ignore model weights, checkpoints, and ONNX data blobs
+models/
+*.onnx
+*.onnx.data
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Python caches & virtual environment
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# System files
+.DS_Store
+Thumbs.db
