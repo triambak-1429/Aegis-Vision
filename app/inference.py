@@ -1,73 +1,21 @@
-import time
-import io
-import base64
-import numpy as np
-import cv2
-from PIL import Image
+import os
+import urllib.request
+from pathlib import Path
 import onnxruntime as ort
-from src.config import ONNX_MODEL_PATH, IMAGE_SIZE, ID2LABEL
+from src.config import ONNX_MODEL_PATH
+
+WEIGHTS_DATA_PATH = Path("models/aegis_vit.onnx.data")
+WEIGHTS_URL = "https://huggingface.co/triambak-1429/aegis-vision-onnx/resolve/main/aegis_vit.onnx.data"
 
 class AegisVisionEngine:
     def __init__(self):
-        # Load your custom fine-tuned model from the local repository
+        # Fetch ONNX data weights from Hugging Face if missing in production container
+        if not WEIGHTS_DATA_PATH.exists():
+            print(f"ONNX weights file not found. Downloading from Hugging Face...")
+            WEIGHTS_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+            req = urllib.request.Request(WEIGHTS_URL, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req) as response, open(WEIGHTS_DATA_PATH, "wb") as f:
+                f.write(response.read())
+            print("Download completed successfully!")
+
         self.session = ort.InferenceSession(str(ONNX_MODEL_PATH), providers=["CPUExecutionProvider"])
-        
-        # ViT Image Normalization parameters
-        self.mean = np.array([0.5, 0.5, 0.5], dtype=np.float32).reshape(1, 1, 3)
-        self.std = np.array([0.5, 0.5, 0.5], dtype=np.float32).reshape(1, 1, 3)
-
-    def preprocess(self, image_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        img_resized = image.resize((IMAGE_SIZE, IMAGE_SIZE))
-        img_np = np.array(img_resized, dtype=np.float32) / 255.0
-        
-        norm_img = (img_np - self.mean) / self.std
-        chw_img = np.transpose(norm_img, (2, 0, 1))
-        batch_input = np.expand_dims(chw_img, axis=0).astype(np.float32)
-        
-        return batch_input, np.array(img_resized)
-
-    def generate_attention_heatmap(self, original_rgb: np.ndarray, is_defect: bool) -> str:
-        height, width, _ = original_rgb.shape
-        heatmap = np.zeros((height, width), dtype=np.float32)
-        
-        if is_defect:
-            cv2.circle(heatmap, (width // 2, height // 2), 60, 1.0, -1)
-            heatmap = cv2.GaussianBlur(heatmap, (55, 55), 0)
-        else:
-            heatmap.fill(0.1)
-
-        heatmap_uint8 = np.uint8(255 * heatmap)
-        color_heatmap = cv2.applyColorMap(heatmap_uint8, cv2.COLORMAP_JET)
-        
-        overlay = cv2.addWeighted(cv2.cvtColor(original_rgb, cv2.COLOR_RGB2BGR), 0.6, color_heatmap, 0.4, 0)
-        _, buffer = cv2.imencode(".png", overlay)
-        return base64.b64encode(buffer).decode("utf-8")
-
-    def inspect(self, image_bytes: bytes, filename: str) -> dict:
-        start_time = time.perf_counter()
-        
-        tensor_input, raw_rgb = self.preprocess(image_bytes)
-        
-        ort_inputs = {"pixel_values": tensor_input}
-        logits = self.session.run(None, ort_inputs)[0][0]
-        
-        exp_logits = np.exp(logits - np.max(logits))
-        probs = exp_logits / np.sum(exp_logits)
-        
-        pred_idx = int(np.argmax(probs))
-        label = ID2LABEL.get(pred_idx, "UNKNOWN")
-        confidence = float(probs[pred_idx])
-        has_defect = (label == "DEFECT")
-        
-        b64_heatmap = self.generate_attention_heatmap(raw_rgb, has_defect)
-        latency = (time.perf_counter() - start_time) * 1000
-        
-        return {
-            "filename": filename,
-            "label": label,
-            "confidence": round(confidence, 4),
-            "has_defect": has_defect,
-            "latency_ms": round(latency, 2),
-            "attention_map_b64": b64_heatmap
-        }
