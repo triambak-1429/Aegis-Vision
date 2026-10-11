@@ -1,21 +1,34 @@
 import time
 import io
 import base64
+import urllib.request
+from pathlib import Path
 import numpy as np
 import cv2
 from PIL import Image
 import onnxruntime as ort
 from src.config import ONNX_MODEL_PATH, IMAGE_SIZE, ID2LABEL
 
+# Fallback Hugging Face URL if local ONNX file is absent
+FALLBACK_ONNX_URL = "https://huggingface.co/google/vit-base-patch16-224/resolve/main/onnx/model.onnx"
+
 class AegisVisionEngine:
     def __init__(self):
-        # Initialize CPU ONNX session
-        self.session = ort.InferenceSession(str(ONNX_MODEL_PATH), providers=["CPUExecutionProvider"])
+        onnx_file = Path(ONNX_MODEL_PATH)
         
-        # Mean and Std normalization values for ViT
+        # Download model automatically if missing in production environment
+        if not onnx_file.exists():
+            print(f"ONNX model not found at {onnx_file}. Downloading runtime weights...")
+            onnx_file.parent.mkdir(parents=True, exist_ok=True)
+            urllib.request.urlretrieve(FALLBACK_ONNX_URL, onnx_file)
+            print("Model download complete!")
+
+        # Initialize CPU ONNX session
+        self.session = ort.InferenceSession(str(onnx_file), providers=["CPUExecutionProvider"])
+        
         self.mean = np.array([0.5, 0.5, 0.5], dtype=np.float32).reshape(1, 1, 3)
         self.std = np.array([0.5, 0.5, 0.5], dtype=np.float32).reshape(1, 1, 3)
-
+        
     def preprocess(self, image_bytes: bytes) -> tuple[np.ndarray, np.ndarray]:
         """Reads raw bytes, resizes to 224x224, and normalizes for ViT input."""
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
